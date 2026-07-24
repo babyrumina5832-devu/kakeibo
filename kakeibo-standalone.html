@@ -22,13 +22,9 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
 /* =========================================================
-   ★★★ ここにご自分のAnthropic APIキーを入れてください ★★★
-   取得先: https://console.anthropic.com/settings/keys
-   このキーはこのファイルの中に保存され、ブラウザから直接
-   Anthropic APIを呼び出します（詳しい注意点はチャットの説明を参照）。
+   自動読み取りは Netlify Functions 経由で行います。
+   APIキーはこのファイルには一切含まれません（安全）。
    ========================================================= */
-const ANTHROPIC_API_KEY = "YOUR_API_KEY_HERE";
-const MODEL = "claude-sonnet-5";
 
 // ---------- Constants ----------
 const DEFAULT_CATEGORIES = [
@@ -271,9 +267,6 @@ function RecordView({ categories, onSave }) {
     if (!file) return;
     setError(""); setAnalyzing(true);
     try {
-      if (!ANTHROPIC_API_KEY || ANTHROPIC_API_KEY === "YOUR_API_KEY_HERE") {
-        throw new Error("APIキーが未設定です");
-      }
       const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result.split(",")[1]);
@@ -281,29 +274,17 @@ function RecordView({ categories, onSave }) {
         reader.readAsDataURL(file);
       });
       const mediaType = file.type || "image/jpeg";
-      const catNames = categories.map((c) => c.name).join("、");
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/.netlify/functions/analyze-receipt", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: MODEL,
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-              { type: "text", text: `このレシート画像から、店名(store)・合計金額の数値のみ(amount)・最も当てはまるカテゴリ(category)・購入した商品名の一覧(items)を読み取ってください。カテゴリは次の中から必ず一つ選んでください: ${catNames}。itemsはレシートに記載された商品名を短い順番リストにしてください（金額は含めず商品名のみ、読み取れない場合は空配列）。判読できない場合は amount は 0、store は空文字にしてください。JSON以外の文字列を一切含めず、次の形式のJSONだけを返してください: {"store": "string", "amount": number, "category": "string", "items": ["string"]}` },
-            ],
-          }],
+          imageBase64: base64,
+          mediaType,
+          categories: categories.map((c) => c.name),
         }),
       });
       const data = await response.json();
-      if (data.error) throw new Error(data.error.message || "APIエラー");
+      if (data.error) throw new Error(data.error);
       const textBlock = (data.content || []).find((b) => b.type === "text");
       const raw = (textBlock?.text || "").replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(raw);
@@ -312,7 +293,7 @@ function RecordView({ categories, onSave }) {
       setForm({ store: parsed.store || "", amount: parsed.amount ? String(parsed.amount) : "", category: matchedCat, date: today(), items: itemsText });
     } catch (err) {
       console.error(err);
-      setError(err.message === "APIキーが未設定です" ? "APIキーが設定されていません。手入力で記録してください。" : "読み取りに失敗しました。手入力で記録してください。");
+      setError("読み取りに失敗しました。手入力で記録してください。");
       setForm({ store: "", amount: "", category: categories[0]?.id || "", date: today(), items: "" });
     } finally {
       setAnalyzing(false);
